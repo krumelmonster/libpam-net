@@ -355,9 +355,8 @@ int pam_sm_open_session(pam_handle_t *pamh, int flags, int argc, const char **ar
 
 	/* Setup bind mounts for config files in /etc */
 	if(bind_etc(user, pam_args.flags) == -1) {
-		syslog (LOG_ERR, "mounting /etc/netns/%s config files failed",
+		syslog (LOG_WARNING, "mounting /etc/netns/%s config files failed",
 				user);
-		goto close_log_and_abort;
 	}
 
 	end_log();
