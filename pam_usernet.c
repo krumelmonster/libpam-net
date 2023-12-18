@@ -24,6 +24,7 @@
  *
  */
 
+#include <pwd.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <syslog.h>
@@ -55,6 +56,7 @@
 struct pam_net_args {
 	const char *group;
 	int flags;
+	const char *uidprefix;
 };
 #define LODOWN 0x1
 #define ROOTSHARED 0x2
@@ -70,6 +72,8 @@ static void parse_argv(struct pam_net_args *args, int argc, const char **argv) {
 			args->flags |= ROOTSHARED;
 		else if (strncmp(*argv, "group=", 6) == 0)
 			args->group = (*argv) + 6;
+		else if (strncmp(*argv, "uidprefix=", 10) == 0)
+			args->uidprefix = (*argv) + 10;
 		else
 			syslog (LOG_ERR, "Unknown option: %s", *argv);
 	}
@@ -311,12 +315,15 @@ int enter_netns(char *ns_path, int flags)
 int pam_sm_open_session(pam_handle_t *pamh, int flags, int argc, const char **argv)
 {
 	const char *user;
+	char nsname[PATH_MAX];
 	int rv;
 	int isusernet;
 	char ns_path[PATH_MAX];
 	struct pam_net_args pam_args = {
 		.group = DEFAULT_GROUP,
-		.flags = 0};
+		.flags = 0,
+		.uidprefix = NULL
+	};
 
 	init_log ("pam_usernet");
 
@@ -337,7 +344,14 @@ int pam_sm_open_session(pam_handle_t *pamh, int flags, int argc, const char **ar
 	if (create_netns_rundir() == -1)
 		goto close_log_and_abort;
 
-	snprintf(ns_path, sizeof(ns_path), "%s/%s", NETNS_RUN_DIR, user);
+	if (pam_args.uidprefix) {
+		struct passwd *pw = getpwnam(user);
+		snprintf(nsname, sizeof(nsname), "%s%i", pam_args.uidprefix, pw->pw_uid);
+	} else {
+		snprintf(nsname, sizeof(nsname), "%s", user);
+	}
+
+	snprintf(ns_path, sizeof(ns_path), "%s/%s", NETNS_RUN_DIR, nsname);
 
 	rv = enter_netns(ns_path, pam_args.flags);
 	if(rv == -1)
@@ -348,15 +362,15 @@ int pam_sm_open_session(pam_handle_t *pamh, int flags, int argc, const char **ar
 		goto close_log_and_abort;
 	}
 
-	if(remount_sys(user, pam_args.flags) == -1) {
+	if(remount_sys(nsname, pam_args.flags) == -1) {
 		syslog (LOG_ERR, "remounting /sys failed");
 		goto close_log_and_abort;
 	}
 
 	/* Setup bind mounts for config files in /etc */
-	if(bind_etc(user, pam_args.flags) == -1) {
+	if(bind_etc(nsname, pam_args.flags) == -1) {
 		syslog (LOG_WARNING, "mounting /etc/netns/%s config files failed",
-				user);
+				nsname);
 	}
 
 	end_log();
